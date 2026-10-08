@@ -33,6 +33,10 @@ def norm_name(text):
     return " ".join(sorted(words))
 
 
+def clean_name(text):
+    return re.sub(r"\s+", " ", str(text)).strip()
+
+
 def read_raw(path):
     """Read a sheet with no assumptions about where the header is."""
     try:
@@ -84,25 +88,44 @@ k_name = pick_col(classlist, "name", exact=True)
 k_reg = pick_col(classlist, "regist")
 k_prog = pick_col(classlist, "programme")
 
-control = control[[c_name, c_reg]].dropna(how="all")
+# prepare control file (names from HERE are used in the output)
+control = control[[c_name, c_reg]].dropna(how="all").copy()
+control[c_name] = control[c_name].map(clean_name)
 control["reg_key"] = control[c_reg].map(norm_reg)
 control["name_key"] = control[c_name].map(norm_name)
 control = control[control["reg_key"].str.len() > 0].drop_duplicates("reg_key")
 
+# prepare class list (only registration number + programme are used from here)
 classlist = classlist[[k_name, k_reg, k_prog]].dropna(how="all").copy()
-classlist["reg_key"] = classlist[k_reg].map(norm_reg)
-classlist["name_key"] = classlist[k_name].map(norm_name)
+classlist.columns = ["CLASS_NAME", "REGISTRATION NUMBER", "PROGRAMME"]
+classlist["reg_key"] = classlist["REGISTRATION NUMBER"].map(norm_reg)
+classlist["name_key"] = classlist["CLASS_NAME"].map(norm_name)
 
 # ---------- match ----------
-by_reg = classlist["reg_key"].isin(control["reg_key"])
-matched = classlist[by_reg]
+# 1) by registration number
+cl_by_reg = classlist[classlist["reg_key"].str.len() > 0].drop_duplicates("reg_key")
+by_reg = control.merge(
+    cl_by_reg[["reg_key", "REGISTRATION NUMBER", "PROGRAMME"]],
+    on="reg_key", how="inner",
+)
 
-# fallback: people whose reg number didn't match but whose name does
-leftover_control = control[~control["reg_key"].isin(matched["reg_key"])]
-by_name = classlist[~by_reg & classlist["name_key"].isin(leftover_control["name_key"])]
+# 2) fallback: leftover control entries matched by name (any word order)
+rest = control[~control["reg_key"].isin(by_reg["reg_key"])]
+cl_by_name = (
+    classlist[~classlist["reg_key"].isin(by_reg["reg_key"])]
+    .drop_duplicates("name_key")
+)
+by_name = rest.merge(
+    cl_by_name[["name_key", "REGISTRATION NUMBER", "PROGRAMME"]],
+    on="name_key", how="inner",
+)
 
-result = pd.concat([matched, by_name])
-result = result[[k_name, k_reg, k_prog]]
+# entries that could not be found in the class list at all
+missing = rest[~rest["name_key"].isin(by_name["name_key"])]
+
+# ---------- build result ----------
+result = pd.concat([by_reg, by_name])
+result = result[[c_name, "REGISTRATION NUMBER", "PROGRAMME"]]
 result.columns = ["NAME", "REGISTRATION NUMBER", "PROGRAMME"]
 result = result.sort_values(["PROGRAMME", "NAME"]).reset_index(drop=True)
 result.index += 1
@@ -111,11 +134,6 @@ result.index += 1
 print(f"Extended accommodation students found in class list: {len(result)}\n")
 print(result.to_string())
 
-# people in the control numbers file who could not be found in the class list
-found_keys = set(matched["reg_key"]) | set(
-    control[control["name_key"].isin(by_name["name_key"])]["reg_key"]
-)
-missing = control[~control["reg_key"].isin(found_keys)]
 if len(missing):
     print(f"\n⚠ {len(missing)} entries in the control numbers file were NOT found in the class list:")
     print(missing[[c_name, c_reg]].to_string(index=False))
