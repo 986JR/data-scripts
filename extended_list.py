@@ -6,7 +6,7 @@ BASE = Path(__file__).resolve().parent
 OUTPUT = BASE / "Extended_Accommodation_List.xlsx"
 
 
-# ---------- helpers ----------
+
 def find_file(patterns):
     for pattern in patterns:
         matches = [
@@ -70,7 +70,7 @@ def pick_col(df, keyword, exact=False):
     raise KeyError(f"No column matching '{keyword}'. Columns found: {list(df.columns)}")
 
 
-# ---------- load files ----------
+
 control_file = find_file(["CIVE Control Numbers*.xls*", "CIVE*.xls*"])
 class_file = find_file(["DS*YEAR12024*.xlsx", "DS*.xlsx"])
 print(f"Control numbers file : {control_file.name}")
@@ -79,37 +79,36 @@ print(f"Class list file      : {class_file.name}\n")
 control = load_table(control_file, "billitemref")
 classlist = load_table(class_file, "regist")
 
-# control numbers file
+
 c_name = pick_col(control, "payername")
 c_reg = pick_col(control, "billitemref")
 
-# class list file ("regist" also matches the typo REGISTTRATION)
+
 k_name = pick_col(classlist, "name", exact=True)
 k_reg = pick_col(classlist, "regist")
 k_prog = pick_col(classlist, "programme")
 
-# prepare control file (names from HERE are used in the output)
+
 control = control[[c_name, c_reg]].dropna(how="all").copy()
 control[c_name] = control[c_name].map(clean_name)
 control["reg_key"] = control[c_reg].map(norm_reg)
 control["name_key"] = control[c_name].map(norm_name)
 control = control[control["reg_key"].str.len() > 0].drop_duplicates("reg_key")
 
-# prepare class list (only registration number + programme are used from here)
+
 classlist = classlist[[k_name, k_reg, k_prog]].dropna(how="all").copy()
 classlist.columns = ["CLASS_NAME", "REGISTRATION NUMBER", "PROGRAMME"]
 classlist["reg_key"] = classlist["REGISTRATION NUMBER"].map(norm_reg)
 classlist["name_key"] = classlist["CLASS_NAME"].map(norm_name)
 
-# ---------- match ----------
-# 1) by registration number
+
 cl_by_reg = classlist[classlist["reg_key"].str.len() > 0].drop_duplicates("reg_key")
 by_reg = control.merge(
     cl_by_reg[["reg_key", "REGISTRATION NUMBER", "PROGRAMME"]],
     on="reg_key", how="inner",
 )
 
-# 2) fallback: leftover control entries matched by name (any word order)
+
 rest = control[~control["reg_key"].isin(by_reg["reg_key"])]
 cl_by_name = (
     classlist[~classlist["reg_key"].isin(by_reg["reg_key"])]
@@ -120,17 +119,17 @@ by_name = rest.merge(
     on="name_key", how="inner",
 )
 
-# entries that could not be found in the class list at all
+
 missing = rest[~rest["name_key"].isin(by_name["name_key"])]
 
-# ---------- build result ----------
+
 result = pd.concat([by_reg, by_name])
 result = result[[c_name, "REGISTRATION NUMBER", "PROGRAMME"]]
 result.columns = ["NAME", "REGISTRATION NUMBER", "PROGRAMME"]
 result = result.sort_values(["PROGRAMME", "NAME"]).reset_index(drop=True)
 result.index += 1
 
-# ---------- report ----------
+
 print(f"Extended accommodation students found in class list: {len(result)}\n")
 print(result.to_string())
 
